@@ -1,6 +1,4 @@
--- Bootstrap: o primeiro admin do condomínio não tem quem gere convite ou aprove seu cadastro.
--- Após o primeiro signup, promover manualmente via SQL Editor do Supabase:
--- update public.profiles set role = 'admin', status = 'aprovado' where id = '<uuid-do-usuario>';
+-- Bootstrap automático: O primeiro usuário criado vira 'admin' e 'aprovado' sem precisar de convite.
 create type public.user_role as enum ('morador', 'sindico', 'admin');
 create type public.profile_status as enum ('pendente', 'aprovado');
 
@@ -150,6 +148,7 @@ $$;
 grant execute on function public.validate_invite_code(text) to anon, authenticated;
 grant execute on function public.redeem_invite_code(text) to authenticated;
 
+-- FUNÇÃO COM BOOTSTRAP AUTOMÁTICO DO PRIMEIRO ADMIN
 create or replace function public.handle_new_user()
 returns trigger
 language plpgsql
@@ -157,19 +156,40 @@ security definer set search_path = public
 as $$
 declare
   v_codigo text := new.raw_user_meta_data ->> 'codigo_convite';
+  v_is_first_user boolean;
 begin
-  if v_codigo is null or not public.validate_invite_code(v_codigo) then
-    raise exception 'código de convite inválido ou expirado';
+  -- Verifica se este é o primeiro perfil a ser criado no sistema
+  select not exists (select 1 from public.profiles) into v_is_first_user;
+
+  if v_is_first_user then
+    -- PRIMEIRO USUÁRIO (BOOTSTRAP):
+    -- Torna-se admin automaticamente sem precisar de convite
+    insert into public.profiles (id, nome, apartamento, role, status)
+    values (
+      new.id,
+      coalesce(new.raw_user_meta_data ->> 'nome', 'Admin Inicial'),
+      coalesce(new.raw_user_meta_data ->> 'apartamento', 'Administração'),
+      'admin',
+      'aprovado'
+    );
+
+  else
+    -- DEMAIS USUÁRIOS:
+    -- Exige código de convite válido e não expirado
+    if v_codigo is null or not public.validate_invite_code(v_codigo) then
+      raise exception 'código de convite inválido ou expirado';
+    end if;
+
+    insert into public.profiles (id, nome, apartamento)
+    values (
+      new.id,
+      coalesce(new.raw_user_meta_data ->> 'nome', ''),
+      coalesce(new.raw_user_meta_data ->> 'apartamento', '')
+    );
+
+    -- Resgata/invalida o código de convite utilizado
+    perform public.redeem_invite_code(v_codigo);
   end if;
-
-  insert into public.profiles (id, nome, apartamento)
-  values (
-    new.id,
-    coalesce(new.raw_user_meta_data ->> 'nome', ''),
-    coalesce(new.raw_user_meta_data ->> 'apartamento', '')
-  );
-
-  perform public.redeem_invite_code(v_codigo);
 
   return new;
 end;
