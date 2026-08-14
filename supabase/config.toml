@@ -1,0 +1,4 @@
+[functions.send-push]
+# Chamada pelo trigger de banco (supabase_functions.http_request), não por
+# uma sessão de usuário — não tem JWT de usuário pra verificar.
+verify_jwt = false
